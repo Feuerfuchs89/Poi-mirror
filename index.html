@@ -205,6 +205,27 @@ kbd { background: rgba(255,255,255,.1); padding: 2px 4px; border-radius: 4px; co
                     <div class="control-label"><span>Licht-Schwellenwert (LED)</span><span id="thresh-val">90%</span></div>
                     <input type="range" id="thresh-slider" min="50" max="99" step="1" value="90">
                 </div>
+                <div class="btn-grid" style="margin-bottom:10px;">
+                    <button id="tail-btn" class="btn">✨ Schweif: Aus</button>
+                    <button id="dim-btn" class="btn">🌑 Nur Licht: Aus</button>
+                </div>
+                <div class="control-group">
+                    <div class="control-label"><span>Schweif-Dauer</span><span id="tail-len-val">2.0s</span></div>
+                    <input type="range" id="tail-len-slider" min="0.5" max="6" step="0.5" value="2">
+                </div>
+                <div class="control-group">
+                    <div class="control-label"><span>Schweif-Dicke</span><span id="tail-w-val">8</span></div>
+                    <input type="range" id="tail-w-slider" min="3" max="24" step="1" value="8">
+                </div>
+                <div class="control-group">
+                    <div class="control-label">Schweif-Farbe</div>
+                    <select id="tail-color-select">
+                        <option value="duo" selected>Pink &amp; Cyan (je Poi)</option>
+                        <option value="rainbow">Regenbogen</option>
+                        <option value="fire">Feuer</option>
+                        <option value="white">Weiss</option>
+                    </select>
+                </div>
             </div>
 
             <div class="control-section">
@@ -216,6 +237,8 @@ kbd { background: rgba(255,255,255,.1); padding: 2px 4px; border-radius: 4px; co
                         <option value="4way">4-Wege (Kardinallinien)</option>
                         <option value="8way" selected>8-Wege (Kardinal + Diagonal)</option>
                         <option value="triquetra">Triquetra / 3-Wege</option>
+                        <option value="16way">16-Wege (dichtes Fadenkreuz)</option>
+                        <option value="rings">Kreise + Kreuz</option>
                     </select>
                 </div>
                 <div class="control-group">
@@ -281,6 +304,11 @@ const state = {
     bpm: 90,
     sectorSound: false,
     instrument: 'synth',
+    tail: false,
+    dim: false,
+    tailLife: 2,
+    tailWidth: 8,
+    tailColor: 'duo',
     isRecording: false,
     videoDevices: [],
     currentDeviceId: null,
@@ -304,7 +332,10 @@ let W = 0, H = 0, DPR = 1;
 let stream = null, cameraReady = false, camToken = 0;
 let frames = [], lastCap = 0;
 const CAP_FPS = 20, CAP_INTERVAL = 1000 / CAP_FPS, CAP_WIDTH = 480;
-let detected = null;             // geglättete LED-Position (CSS-Pixel)
+const tracks = [                 // verfolgte Poi-Lichter (CSS-Pixel)
+    { pts: [], last: null, lastSeen: 0, rgb: [244, 63, 94] },
+    { pts: [], last: null, lastSeen: 0, rgb: [56, 189, 248] }
+];
 let lastSector = -1;
 let beatPulse = 0;
 
@@ -417,6 +448,7 @@ function stopCamera() {
     if (stream) stream.getTracks().forEach(t => t.stop());
     stream = null;
     video.srcObject = null;
+    tracks.forEach(t => { t.pts.length = 0; t.last = null; });
 }
 
 async function getCameras() {
@@ -544,9 +576,9 @@ function drawSource(c, src, sw, sh, mirrorLive) {
     return r;
 }
 
-/* ---------- LED-Erkennung ---------- */
-function detectLED(src, sw, sh, mirrorLive, rect) {
-    const aw = 160, ah = Math.max(1, Math.round(aw * sh / sw));
+/* ---------- LED-Erkennung (bis zu 2 Lichter) ---------- */
+function detectBlobs(src, sw, sh, mirrorLive, rect) {
+    const aw = 240, ah = Math.max(1, Math.round(aw * sh / sw));
     if (anaCanvas.width !== aw || anaCanvas.height !== ah) { anaCanvas.width = aw; anaCanvas.height = ah; }
     actx.save();
     if (mirrorLive) { actx.translate(aw, 0); actx.scale(-1, 1); }
@@ -554,16 +586,68 @@ function detectLED(src, sw, sh, mirrorLive, rect) {
     actx.restore();
 
     let data;
-    try { data = actx.getImageData(0, 0, aw, ah).data; } catch (e) { return null; }
+    try { data = actx.getImageData(0, 0, aw, ah).data; } catch (e) { return []; }
 
     const thresh = state.lightThreshold * 255;
-    let sx = 0, sy = 0, n = 0;
+    const mask = new Uint8Array(aw * ah);
     for (let i = 0, p = 0; i < data.length; i += 4, p++) {
-        const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-        if (lum > thresh) { sx += p % aw; sy += (p / aw) | 0; n++; }
+        if (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2] > thresh) mask[p] = 1;
     }
-    if (n < 2) return null;
-    return { x: rect.dx + (sx / n / aw) * rect.dw, y: rect.dy + (sy / n / ah) * rect.dh };
+
+    const blobs = [], stack = [];
+    for (let p0 = 0; p0 < mask.length; p0++) {
+        if (mask[p0] !== 1) continue;
+        let sx = 0, sy = 0, n = 0;
+        stack.length = 0; stack.push(p0); mask[p0] = 2;
+        while (stack.length) {
+            const p = stack.pop(), x = p % aw, y = (p / aw) | 0;
+            sx += x; sy += y; n++;
+            if (x > 0 && mask[p - 1] === 1) { mask[p - 1] = 2; stack.push(p - 1); }
+            if (x < aw - 1 && mask[p + 1] === 1) { mask[p + 1] = 2; stack.push(p + 1); }
+            if (y > 0 && mask[p - aw] === 1) { mask[p - aw] = 2; stack.push(p - aw); }
+            if (y < ah - 1 && mask[p + aw] === 1) { mask[p + aw] = 2; stack.push(p + aw); }
+        }
+        if (n >= 3) blobs.push({ x: rect.dx + ((sx / n + 0.5) / aw) * rect.dw, y: rect.dy + ((sy / n + 0.5) / ah) * rect.dh, n });
+    }
+    blobs.sort((a, b) => b.n - a.n);
+    return blobs.slice(0, 2);
+}
+
+/* Ordnet die gefundenen Lichter den zwei Spuren zu (Poi 1 = pink, Poi 2 = cyan) */
+function updateTracks(blobs, now) {
+    const life = state.tailLife * 1000;
+    const jump = Math.max(W, H) * 0.45;
+    let assign = [null, null];
+    const dist = (t, p) => t.last ? Math.hypot(t.last.x - p.x, t.last.y - p.y) : 0;
+
+    if (blobs.length === 1) {
+        const b = blobs[0];
+        const d0 = tracks[0].last ? dist(tracks[0], b) : Infinity;
+        const d1 = tracks[1].last ? dist(tracks[1], b) : Infinity;
+        assign[d0 <= d1 ? 0 : 1] = b;
+    } else if (blobs.length === 2) {
+        const [a, b] = blobs;
+        assign = (dist(tracks[0], a) + dist(tracks[1], b) <= dist(tracks[0], b) + dist(tracks[1], a)) ? [a, b] : [b, a];
+    }
+
+    tracks.forEach((t, i) => {
+        const b = assign[i];
+        if (b) {
+            let x = b.x, y = b.y;
+            if (t.last) {
+                if (Math.hypot(x - t.last.x, y - t.last.y) > jump) t.pts.push({ gap: true, t: now });
+                else { x = t.last.x + (x - t.last.x) * 0.75; y = t.last.y + (y - t.last.y) * 0.75; }
+            }
+            t.last = { x, y };
+            t.lastSeen = now;
+            t.pts.push({ x, y, t: now });
+        } else if (t.last && now - t.lastSeen > 500) {     // Licht länger weg: Linie unterbrechen
+            t.pts.push({ gap: true, t: now });
+            t.last = null;
+        }
+        while (t.pts.length && now - t.pts[0].t > life) t.pts.shift();
+        if (t.pts.length > 900) t.pts.splice(0, t.pts.length - 900);
+    });
 }
 
 /* ---------- Render-Loop ---------- */
@@ -585,16 +669,18 @@ function render(now) {
     tctx.fillStyle = `rgba(0,0,0,${(1 - state.trail).toFixed(3)})`;
     tctx.fillRect(0, 0, W, H);
 
-    detected = null;
+    let blobs = [];
     if (!buffering) {
         tctx.globalCompositeOperation = 'lighten';
         const rect = drawSource(tctx, src, sw, sh, mirrorLive);
         tctx.globalCompositeOperation = 'source-over';
-        detected = detectLED(src, sw, sh, mirrorLive, rect);
+        blobs = detectBlobs(src, sw, sh, mirrorLive, rect);
     }
+    updateTracks(blobs, now);
 
     ctx.globalCompositeOperation = 'source-over';
     ctx.drawImage(trailCanvas, 0, 0, W, H);
+    if (state.dim) { ctx.fillStyle = 'rgba(0,0,0,.72)'; ctx.fillRect(0, 0, W, H); }
 
     if (buffering) {
         ctx.fillStyle = 'rgba(248,250,252,.8)';
@@ -603,22 +689,85 @@ function render(now) {
         ctx.fillText('Delay-Puffer füllt sich …', W / 2, H / 2);
     }
 
-    handleDetection();
+    handleDetection(now);
     drawOverlays();
 }
 
-function handleDetection() {
-    if (!detected) { lastSector = -1; return; }
+function hslToRgb(h, s, l) {
+    h = ((h % 360) + 360) % 360 / 360;
+    const f = (p, q, t) => { t = (t + 1) % 1; return t < 1/6 ? p + (q - p) * 6 * t : t < .5 ? q : t < 2/3 ? p + (q - p) * (2/3 - t) * 6 : p; };
+    const q = l < .5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+    return [Math.round(f(p, q, h + 1/3) * 255), Math.round(f(p, q, h) * 255), Math.round(f(p, q, h - 1/3) * 255)];
+}
+function tailRgb(track, ti, age, t) {
+    switch (state.tailColor) {
+        case 'rainbow': return hslToRgb(t / 8, 1, .55);
+        case 'fire':    return hslToRgb(52 * (1 - age), 1, .5);
+        case 'white':   return [255, 255, 255];
+        default:        return track.rgb;
+    }
+}
 
-    ctx.beginPath();
-    ctx.arc(detected.x, detected.y, 14, 0, Math.PI * 2);
-    ctx.strokeStyle = '#f43f5e';
-    ctx.lineWidth = 3;
-    ctx.stroke();
+function drawTails(now) {
+    const life = state.tailLife * 1000;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    tracks.forEach((tr, ti) => {
+        const p = tr.pts;
+        for (let i = 1; i < p.length; i++) {
+            if (p[i].gap || p[i - 1].gap) continue;
+            const age = Math.min(1, (now - p[i].t) / life), a = 1 - age;
+            if (a <= 0.02) continue;
+            const [r, g, b] = tailRgb(tr, ti, age, p[i].t);
+            const w = state.tailWidth * (0.25 + 0.75 * a);
+            ctx.beginPath();
+            ctx.moveTo(p[i - 1].x, p[i - 1].y);
+            ctx.lineTo(p[i].x, p[i].y);
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.strokeStyle = `rgba(${r},${g},${b},${(0.2 * a).toFixed(3)})`;
+            ctx.lineWidth = w * 2.8;
+            ctx.stroke();
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.strokeStyle = `rgba(${r},${g},${b},${Math.min(1, 1.1 * a).toFixed(3)})`;
+            ctx.lineWidth = w;
+            ctx.stroke();
+            ctx.strokeStyle = `rgba(255,255,255,${(0.75 * a).toFixed(3)})`;
+            ctx.lineWidth = Math.max(1, w * 0.3);
+            ctx.stroke();
+        }
+    });
+    ctx.restore();
+}
 
+function handleDetection(now) {
+    if (state.tail) drawTails(now);
+
+    const heads = tracks.filter(t => t.last && now - t.lastSeen < 150);
+    heads.forEach(t => {
+        if (state.tail) {                         // leuchtender Kopf
+            const [r, g, b] = tailRgb(t, tracks.indexOf(t), 0, now);
+            const rad = state.tailWidth * 1.4;
+            const grad = ctx.createRadialGradient(t.last.x, t.last.y, 0, t.last.x, t.last.y, rad * 2.2);
+            grad.addColorStop(0, 'rgba(255,255,255,1)');
+            grad.addColorStop(0.35, `rgba(${r},${g},${b},.8)`);
+            grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
+            ctx.fillStyle = grad;
+            ctx.beginPath(); ctx.arc(t.last.x, t.last.y, rad * 2.2, 0, Math.PI * 2); ctx.fill();
+        } else {                                  // einfacher Ring
+            ctx.beginPath();
+            ctx.arc(t.last.x, t.last.y, 14, 0, Math.PI * 2);
+            ctx.strokeStyle = `rgb(${t.rgb.join(',')})`;
+            ctx.lineWidth = 3;
+            ctx.stroke();
+        }
+    });
+
+    if (!heads.length) { lastSector = -1; return; }
     if (state.sectorSound) {
+        const h = heads[0].last;
         const cx = W * state.centerPin.x, cy = H * state.centerPin.y;
-        let ang = Math.atan2(detected.y - cy, detected.x - cx) + Math.PI;   // 0 … 2π
+        const ang = Math.atan2(h.y - cy, h.x - cx) + Math.PI;
         const sector = Math.min(7, Math.floor(ang / (Math.PI * 2) * 8));
         if (sector !== lastSector) { lastSector = sector; playSectorSound(sector); }
     }
@@ -651,6 +800,25 @@ function drawOverlays() {
             const a = (i * 120 - 90) * Math.PI / 180;
             ctx.beginPath();
             ctx.moveTo(cx, cy);
+            ctx.lineTo(cx + Math.cos(a) * L, cy + Math.sin(a) * L);
+            ctx.stroke();
+        }
+    }
+
+    if (state.grid === 'rings') {
+        const Rg = Math.min(W, H) * 0.45;
+        ctx.strokeStyle = 'rgba(56,189,248,.35)';
+        ctx.lineWidth = 2;
+        [1/3, 2/3, 1].forEach(f => { ctx.beginPath(); ctx.arc(cx, cy, Rg * f, 0, Math.PI * 2); ctx.stroke(); });
+        ctx.beginPath();
+        ctx.moveTo(cx, 0); ctx.lineTo(cx, H); ctx.moveTo(0, cy); ctx.lineTo(W, cy);
+        ctx.stroke();
+    } else if (state.grid === '16way') {
+        for (let k = 0; k < 8; k++) {
+            const a = k * Math.PI / 8;
+            ctx.strokeStyle = k % 2 === 0 ? 'rgba(56,189,248,.4)' : 'rgba(56,189,248,.2)';
+            ctx.beginPath();
+            ctx.moveTo(cx - Math.cos(a) * L, cy - Math.sin(a) * L);
             ctx.lineTo(cx + Math.cos(a) * L, cy + Math.sin(a) * L);
             ctx.stroke();
         }
@@ -714,6 +882,28 @@ $('size-slider').addEventListener('input', e => {
     $('size-val').textContent = e.target.value + '%';
 });
 $('instrument-select').addEventListener('change', e => { state.instrument = e.target.value; });
+
+/* Schweif */
+function toggleBtn(id, key, label) {
+    $(id).addEventListener('click', () => {
+        state[key] = !state[key];
+        const b = $(id);
+        b.textContent = label + (state[key] ? 'An' : 'Aus');
+        b.classList.toggle('btn-active', state[key]);
+        if (key === 'tail') tracks.forEach(t => { t.pts.length = 0; });
+    });
+}
+toggleBtn('tail-btn', 'tail', '✨ Schweif: ');
+toggleBtn('dim-btn', 'dim', '🌑 Nur Licht: ');
+$('tail-len-slider').addEventListener('input', e => {
+    state.tailLife = parseFloat(e.target.value);
+    $('tail-len-val').textContent = state.tailLife.toFixed(1) + 's';
+});
+$('tail-w-slider').addEventListener('input', e => {
+    state.tailWidth = parseInt(e.target.value, 10);
+    $('tail-w-val').textContent = e.target.value;
+});
+$('tail-color-select').addEventListener('change', e => { state.tailColor = e.target.value; });
 
 /* Metronom */
 let metroInterval = null;
@@ -838,7 +1028,6 @@ function quitApp() {
     camToken++;                                         // laufende Kamera-Starts verwerfen
     stopCamera();
     frames = [];
-    detected = null;
     clearInterval(metroInterval);
     if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
     tctx.fillStyle = '#000'; tctx.fillRect(0, 0, W, H);
