@@ -95,20 +95,23 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border: 0; bo
 .btn-active { background: rgba(56,189,248,.25) !important; border-color: var(--accent-cyan) !important; color: var(--accent-cyan) !important; }
 .btn-danger { background: var(--accent-pink); color: #fff; border: none; }
 .btn-danger:hover { background: #fb7185; }
+.btn-quit { width: 100%; border-color: rgba(244,63,94,.6); color: #fda4af; }
+.btn-quit:hover { background: rgba(244,63,94,.2); border-color: #f43f5e; }
 .btn-recording { animation: pulse 1.2s infinite; }
 @keyframes pulse { 50% { opacity: .65; } }
 
 /* Kamera-Hinweis */
-#cam-overlay {
+#cam-overlay, #end-overlay {
     position: absolute; inset: 0; z-index: 15; display: none;
     align-items: center; justify-content: center; padding: 24px; text-align: center;
     background: rgba(11,15,25,.88);
 }
-#cam-overlay.show { display: flex; }
-#cam-box { max-width: 380px; display: flex; flex-direction: column; gap: 14px; align-items: center; }
-#cam-box h2 { font-size: 1.1rem; color: var(--accent-cyan); }
+#cam-overlay.show, #end-overlay.show { display: flex; }
+#end-overlay { z-index: 50; background: #05070d; }
+.ov-box { max-width: 380px; display: flex; flex-direction: column; gap: 14px; align-items: center; }
+.ov-box h2 { font-size: 1.1rem; color: var(--accent-cyan); }
 #cam-msg { font-size: .9rem; color: var(--text-muted); line-height: 1.5; }
-#cam-retry-btn { padding: 12px 20px; font-size: .95rem; }
+#cam-retry-btn, #restart-btn { padding: 12px 20px; font-size: .95rem; }
 
 #shortcuts-help {
     position: absolute; bottom: calc(12px + var(--safe-b)); right: calc(12px + var(--safe-r));
@@ -144,10 +147,19 @@ kbd { background: rgba(255,255,255,.1); padding: 2px 4px; border-radius: 4px; co
     <canvas id="output-canvas"></canvas>
 
     <div id="cam-overlay">
-        <div id="cam-box">
+        <div class="ov-box">
             <h2>Kamera nicht verfügbar</h2>
             <p id="cam-msg"></p>
             <button id="cam-retry-btn" class="btn btn-active">📷 Kamera starten</button>
+        </div>
+    </div>
+
+    <div id="end-overlay">
+        <div class="ov-box">
+            <img src="icon.svg" width="96" height="96" alt="" style="border-radius:22px">
+            <h2>Poi Mirror beendet</h2>
+            <p id="end-msg">Kamera, Metronom und Aufnahme sind aus. Du kannst dieses Fenster jetzt schliessen.</p>
+            <button id="restart-btn" class="btn btn-active">▶ Neu starten</button>
         </div>
     </div>
 
@@ -241,6 +253,8 @@ kbd { background: rgba(255,255,255,.1); padding: 2px 4px; border-radius: 4px; co
                     </select>
                 </div>
             </div>
+
+            <button id="quit-btn" class="btn btn-quit">⏻ App beenden</button>
         </div>
     </div>
 
@@ -495,7 +509,7 @@ $('switch-cam-btn').addEventListener('click', () => {
 $('cam-retry-btn').addEventListener('click', () => { initAudio(); startCamera(state.currentDeviceId); });
 
 document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && stream) {
+    if (document.visibilityState === 'visible' && stream && !$('end-overlay').classList.contains('show')) {
         const t = stream.getVideoTracks()[0];
         if (!t || t.readyState === 'ended') startCamera(state.currentDeviceId);
     }
@@ -815,6 +829,29 @@ window.addEventListener('keydown', e => {
     else if (e.code === 'KeyM') $('mirror-btn').click();
     else if (e.code === 'KeyH') $('toggle-panel-btn').click();
     else if (e.code === 'KeyC') $('switch-cam-btn').click();
+});
+
+/* App beenden: alles abschalten (Kamera-LED aus), dann versuchen das Fenster zu schliessen */
+function quitApp() {
+    if (state.isRecording) recordBtn.click();           // speichert die laufende Aufnahme
+    if (state.metronome) $('metro-btn').click();
+    camToken++;                                         // laufende Kamera-Starts verwerfen
+    stopCamera();
+    frames = [];
+    detected = null;
+    clearInterval(metroInterval);
+    if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+    tctx.fillStyle = '#000'; tctx.fillRect(0, 0, W, H);
+    hideCamError();
+    setPanel(false);
+    $('end-overlay').classList.add('show');
+    // schliesst installierte Apps und per Skript geöffnete Fenster; normale Browser-Tabs verbieten das
+    setTimeout(() => { try { window.close(); } catch (e) {} }, 600);
+}
+$('quit-btn').addEventListener('click', quitApp);
+$('restart-btn').addEventListener('click', () => {
+    $('end-overlay').classList.remove('show');
+    startCamera(state.currentDeviceId);
 });
 
 /* Offline-Fähigkeit / Installation als App */

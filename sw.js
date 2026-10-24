@@ -1,4 +1,4 @@
-const CACHE = 'poi-mirror-v1';
+const CACHE = 'poi-mirror-v2';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png', 'favicon-48.png'];
 
 self.addEventListener('install', e => {
