@@ -16,7 +16,7 @@
 <style>
 :root {
     --bg-color: #0b0f19;
-    --panel-bg: rgba(15, 23, 42, 0.92);
+    --panel-bg: rgba(15, 23, 42, 0.96);
     --panel-border: rgba(56, 189, 248, 0.25);
     --accent-cyan: #38bdf8;
     --accent-pink: #f43f5e;
@@ -48,7 +48,6 @@ body, html {
     position: absolute; top: calc(12px + var(--safe-t)); left: calc(12px + var(--safe-l)); z-index: 30;
     width: 44px; height: 44px; border-radius: 50%; cursor: pointer;
     background: var(--panel-bg); border: 1px solid var(--panel-border); color: var(--accent-cyan);
-    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
     box-shadow: 0 4px 12px rgba(0,0,0,.4); font-size: 1.2rem;
     display: flex; align-items: center; justify-content: center;
 }
@@ -58,7 +57,7 @@ body, html {
     position: absolute; z-index: 20;
     top: calc(64px + var(--safe-t)); left: calc(12px + var(--safe-l));
     width: 330px; max-height: calc(100% - 76px - var(--safe-t) - var(--safe-b));
-    background: var(--panel-bg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    background: var(--panel-bg);
     border: 1px solid var(--panel-border); border-radius: 12px;
     display: flex; flex-direction: column;
     box-shadow: 0 8px 32px rgba(0,0,0,.6);
@@ -117,10 +116,11 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border: 0; bo
     position: absolute; bottom: calc(12px + var(--safe-b)); right: calc(12px + var(--safe-r));
     background: var(--panel-bg); border: 1px solid var(--panel-border);
     padding: 8px 12px; border-radius: 8px; font-size: .75rem; color: var(--text-muted);
-    pointer-events: none; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    pointer-events: none;
 }
 kbd { background: rgba(255,255,255,.1); padding: 2px 4px; border-radius: 4px; color: var(--accent-cyan); font-family: monospace; }
 
+#fps { position: absolute; top: calc(14px + var(--safe-t)); right: calc(12px + var(--safe-r)); z-index: 5; font-size: .7rem; color: var(--text-muted); opacity: .8; pointer-events: none; font-variant-numeric: tabular-nums; }
 #toast {
     position: absolute; top: calc(14px + var(--safe-t)); left: 50%; transform: translateX(-50%);
     max-width: calc(100% - 140px); text-align: center;
@@ -164,6 +164,7 @@ kbd { background: rgba(255,255,255,.1); padding: 2px 4px; border-radius: 4px; co
     </div>
 
     <button id="toggle-panel-btn" title="Einstellungen (H)" aria-label="Einstellungen umschalten">⚙️</button>
+    <div id="fps"></div>
     <div id="toast" role="status" aria-live="polite"></div>
 
     <div id="controls-panel">
@@ -184,6 +185,14 @@ kbd { background: rgba(255,255,255,.1); padding: 2px 4px; border-radius: 4px; co
                 </div>
                 <div class="control-group">
                     <button id="switch-cam-btn" class="btn">🔄 Kamera wechseln (Front/Back)</button>
+                </div>
+                <div class="control-group">
+                    <div class="control-label">Darstellung / Aufnahme-Auflösung</div>
+                    <select id="res-select">
+                        <option value="1280">Hoch (1280)</option>
+                        <option value="960" selected>Normal (960)</option>
+                        <option value="640">Flüssig (640)</option>
+                    </select>
                 </div>
                 <div class="control-group">
                     <div class="control-label"><span>Replay-Delay (Zeitversatz)</span><span id="delay-val">0.0s</span></div>
@@ -304,6 +313,7 @@ const state = {
     bpm: 90,
     sectorSound: false,
     instrument: 'synth',
+    res: 960,
     tail: false,
     dim: false,
     tailLife: 2,
@@ -318,9 +328,9 @@ const state = {
 const $ = id => document.getElementById(id);
 const video = $('webcam');
 const canvas = $('output-canvas');
-const ctx = canvas.getContext('2d');
+const ctx = canvas.getContext('2d', { alpha: false });
 const trailCanvas = document.createElement('canvas');      // sammelt Video + Trails
-const tctx = trailCanvas.getContext('2d');
+const tctx = trailCanvas.getContext('2d', { alpha: false });
 const anaCanvas = document.createElement('canvas');        // kleine Analyse-Ebene für LED-Erkennung
 const actx = anaCanvas.getContext('2d', { willReadFrequently: true });
 const controlsPanel = $('controls-panel');
@@ -338,6 +348,8 @@ const tracks = [                 // verfolgte Poi-Lichter (CSS-Pixel)
 ];
 let lastSector = -1;
 let beatPulse = 0;
+let lastVT = -1, fpsCount = 0, fpsT = 0, lowFpsSecs = 0, fpsHinted = false;
+const fpsEl = document.getElementById('fps');
 
 /* ---------- Helfer ---------- */
 let toastTimer = null;
@@ -349,9 +361,9 @@ function showToast(msg) {
 }
 
 function resizeCanvas() {
-    DPR = Math.min(window.devicePixelRatio || 1, 1.5);
     W = canvas.clientWidth || window.innerWidth;
     H = canvas.clientHeight || window.innerHeight;
+    DPR = Math.min(window.devicePixelRatio || 1, state.res / Math.max(W, H));   // lange Seite max. state.res Pixel
     canvas.width = Math.round(W * DPR);
     canvas.height = Math.round(H * DPR);
     trailCanvas.width = canvas.width;
@@ -477,7 +489,7 @@ async function startCamera(deviceId = null) {
     hideCamError();
     frames = [];
 
-    const base = { width: { ideal: 1280 }, height: { ideal: 720 } };
+    const base = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } };
     const attempts = [];
     if (deviceId) attempts.push({ video: { ...base, deviceId: { exact: deviceId } }, audio: false });
     else attempts.push({ video: { ...base, facingMode: { ideal: state.facing } }, audio: false });
@@ -578,7 +590,7 @@ function drawSource(c, src, sw, sh, mirrorLive) {
 
 /* ---------- LED-Erkennung (bis zu 2 Lichter) ---------- */
 function detectBlobs(src, sw, sh, mirrorLive, rect) {
-    const aw = 240, ah = Math.max(1, Math.round(aw * sh / sw));
+    const aw = 160, ah = Math.max(1, Math.round(aw * sh / sw));
     if (anaCanvas.width !== aw || anaCanvas.height !== ah) { anaCanvas.width = aw; anaCanvas.height = ah; }
     actx.save();
     if (mirrorLive) { actx.translate(aw, 0); actx.scale(-1, 1); }
@@ -655,6 +667,23 @@ function render(now) {
     requestAnimationFrame(render);
     if (!cameraReady || video.readyState < 2 || !video.videoWidth) return;
 
+    // Nur rechnen, wenn die Kamera ein neues Bild geliefert hat (spart bis zur Hälfte der Arbeit)
+    const vt = video.currentTime;
+    if (vt === lastVT) return;
+    lastVT = vt;
+    if (!fpsT) fpsT = now;
+    fpsCount++;
+    if (now - fpsT >= 1000) {
+        const fps = Math.round(fpsCount * 1000 / (now - fpsT));
+        fpsEl.textContent = fps + ' fps';
+        lowFpsSecs = fps < 20 ? lowFpsSecs + 1 : 0;
+        if (lowFpsSecs >= 3 && !fpsHinted) {
+            fpsHinted = true;
+            showToast('Niedrige Bildrate: mehr Licht im Raum oder Auflösung „Flüssig“ wählen');
+        }
+        fpsCount = 0; fpsT = now;
+    }
+
     const vw = video.videoWidth, vh = video.videoHeight;
     let src = video, sw = vw, sh = vh, mirrorLive = state.mirror, buffering = false;
 
@@ -709,27 +738,36 @@ function tailRgb(track, ti, age, t) {
 }
 
 function drawTails(now) {
-    const life = state.tailLife * 1000;
+    const life = state.tailLife * 1000, B = 16;
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     tracks.forEach((tr, ti) => {
         const p = tr.pts;
+        const buckets = Array.from({ length: B }, () => []);
         for (let i = 1; i < p.length; i++) {
             if (p[i].gap || p[i - 1].gap) continue;
-            const age = Math.min(1, (now - p[i].t) / life), a = 1 - age;
-            if (a <= 0.02) continue;
-            const [r, g, b] = tailRgb(tr, ti, age, p[i].t);
+            const age = (now - p[i].t) / life;
+            if (age >= 1) continue;
+            buckets[Math.min(B - 1, (age * B) | 0)].push(p[i - 1], p[i]);
+        }
+        for (let k = 0; k < B; k++) {
+            const seg = buckets[k];
+            if (!seg.length) continue;
+            const age = (k + 0.5) / B, a = 1 - age;
+            const [r, g, bl] = tailRgb(tr, ti, age, seg[1].t);
             const w = state.tailWidth * (0.25 + 0.75 * a);
             ctx.beginPath();
-            ctx.moveTo(p[i - 1].x, p[i - 1].y);
-            ctx.lineTo(p[i].x, p[i].y);
+            for (let j = 0; j < seg.length; j += 2) {
+                ctx.moveTo(seg[j].x, seg[j].y);
+                ctx.lineTo(seg[j + 1].x, seg[j + 1].y);
+            }
             ctx.globalCompositeOperation = 'lighter';
-            ctx.strokeStyle = `rgba(${r},${g},${b},${(0.2 * a).toFixed(3)})`;
+            ctx.strokeStyle = `rgba(${r},${g},${bl},${(0.22 * a).toFixed(3)})`;
             ctx.lineWidth = w * 2.8;
             ctx.stroke();
             ctx.globalCompositeOperation = 'source-over';
-            ctx.strokeStyle = `rgba(${r},${g},${b},${Math.min(1, 1.1 * a).toFixed(3)})`;
+            ctx.strokeStyle = `rgba(${r},${g},${bl},${Math.min(1, 1.1 * a).toFixed(3)})`;
             ctx.lineWidth = w;
             ctx.stroke();
             ctx.strokeStyle = `rgba(255,255,255,${(0.75 * a).toFixed(3)})`;
@@ -883,6 +921,12 @@ $('size-slider').addEventListener('input', e => {
 });
 $('instrument-select').addEventListener('change', e => { state.instrument = e.target.value; });
 
+$('res-select').addEventListener('change', e => {
+    state.res = parseInt(e.target.value, 10);
+    resizeCanvas();
+    showToast('Auflösung: ' + e.target.selectedOptions[0].text);
+});
+
 /* Schweif */
 function toggleBtn(id, key, label) {
     $(id).addEventListener('click', () => {
@@ -968,7 +1012,7 @@ const recordBtn = $('record-btn');
 let mediaRecorder = null, recordedChunks = [];
 function pickMime() {
     if (!window.MediaRecorder) return null;
-    const list = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+    const list = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=h264', 'video/webm;codecs=vp8', 'video/webm'];
     return list.find(t => MediaRecorder.isTypeSupported(t)) || '';
 }
 recordBtn.addEventListener('click', () => {
@@ -977,7 +1021,7 @@ recordBtn.addEventListener('click', () => {
         if (mime === null || !canvas.captureStream) { showToast('Aufnahme in diesem Browser nicht unterstützt'); return; }
         try {
             const s = canvas.captureStream(30);
-            mediaRecorder = new MediaRecorder(s, mime ? { mimeType: mime } : undefined);
+            mediaRecorder = new MediaRecorder(s, mime ? { mimeType: mime, videoBitsPerSecond: 5000000 } : { videoBitsPerSecond: 5000000 });
             recordedChunks = [];
             mediaRecorder.ondataavailable = e => { if (e.data && e.data.size) recordedChunks.push(e.data); };
             mediaRecorder.onstop = () => {
