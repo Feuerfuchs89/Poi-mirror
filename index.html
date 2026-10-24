@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f19">
+<title>Poi Mirror – Flow Arts Practice Tool</title>
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="icon" type="image/png" sizes="48x48" href="favicon-48.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Poi Mirror">
+<meta name="description" content="Poi Mirror – Webcam-Spiegel mit LED-Tracking, Trails, Mustern und Metronom für Flow Arts">
+<style>
+:root {
+    --bg-color: #0b0f19;
+    --panel-bg: rgba(15, 23, 42, 0.92);
+    --panel-border: rgba(56, 189, 248, 0.25);
+    --accent-cyan: #38bdf8;
+    --accent-pink: #f43f5e;
+    --accent-purple: #a855f7;
+    --text-main: #f8fafc;
+    --text-muted: #94a3b8;
+    --safe-t: env(safe-area-inset-top, 0px);
+    --safe-b: env(safe-area-inset-bottom, 0px);
+    --safe-l: env(safe-area-inset-left, 0px);
+    --safe-r: env(safe-area-inset-right, 0px);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+body, html {
+    width: 100%; height: 100%; overflow: hidden;
+    background: var(--bg-color);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text-main);
+    -webkit-user-select: none; user-select: none;
+}
+#app-container { position: fixed; inset: 0; background: #000; }
+
+/* Das Video wird NICHT mit display:none versteckt (iOS/Safari liefert dann keine Frames),
+   sondern unsichtbar ausserhalb des Blickfelds gehalten. */
+#webcam { position: absolute; width: 2px; height: 2px; opacity: 0; pointer-events: none; left: 0; top: 0; }
+#output-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+
+/* Umschalt-Button: immer sichtbar, liegt über dem Panel */
+#toggle-panel-btn {
+    position: absolute; top: calc(12px + var(--safe-t)); left: calc(12px + var(--safe-l)); z-index: 30;
+    width: 44px; height: 44px; border-radius: 50%; cursor: pointer;
+    background: var(--panel-bg); border: 1px solid var(--panel-border); color: var(--accent-cyan);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 4px 12px rgba(0,0,0,.4); font-size: 1.2rem;
+    display: flex; align-items: center; justify-content: center;
+}
+
+/* Panel */
+#controls-panel {
+    position: absolute; z-index: 20;
+    top: calc(64px + var(--safe-t)); left: calc(12px + var(--safe-l));
+    width: 330px; max-height: calc(100% - 76px - var(--safe-t) - var(--safe-b));
+    background: var(--panel-bg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--panel-border); border-radius: 12px;
+    display: flex; flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0,0,0,.6);
+    transition: transform .25s ease, opacity .25s ease;
+}
+#controls-panel.collapsed { transform: translateX(-380px); opacity: 0; pointer-events: none; }
+
+.panel-header { padding: 12px 16px; border-bottom: 1px solid var(--panel-border); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+.panel-title { font-size: 1.05rem; font-weight: 700; color: var(--accent-cyan); display: flex; align-items: center; gap: 8px; }
+#close-panel-btn { width: 32px; height: 32px; padding: 0; cursor: pointer; font-size: 1rem; }
+.panel-content { padding: 14px; overflow-y: auto; -webkit-overflow-scrolling: touch; display: flex; flex-direction: column; gap: 12px; }
+.panel-content::-webkit-scrollbar { width: 6px; }
+.panel-content::-webkit-scrollbar-thumb { background: rgba(56,189,248,.3); border-radius: 3px; }
+
+.control-section { background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.05); border-radius: 8px; padding: 12px; }
+.section-title { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--accent-cyan); margin-bottom: 10px; font-weight: 600; }
+.control-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.control-group:last-child { margin-bottom: 0; }
+.control-label { font-size: .8rem; color: var(--text-muted); display: flex; justify-content: space-between; }
+
+select, button {
+    background: rgba(15,23,42,.9); border: 1px solid var(--panel-border); color: var(--text-main);
+    padding: 9px 12px; border-radius: 6px; font-size: .85rem; font-family: inherit; outline: none; transition: all .2s ease;
+}
+select:focus-visible, button:focus-visible, input:focus-visible { border-color: var(--accent-cyan); box-shadow: 0 0 0 2px rgba(56,189,248,.35); }
+
+input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 6px; background: rgba(255,255,255,.12); border-radius: 3px; outline: none; }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: var(--accent-cyan); cursor: pointer; box-shadow: 0 0 8px var(--accent-cyan); }
+input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border: 0; border-radius: 50%; background: var(--accent-cyan); cursor: pointer; }
+
+.btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.btn { cursor: pointer; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 6px; background: rgba(30,41,59,.8); }
+.btn:hover { background: rgba(56,189,248,.15); border-color: var(--accent-cyan); }
+.btn-active { background: rgba(56,189,248,.25) !important; border-color: var(--accent-cyan) !important; color: var(--accent-cyan) !important; }
+.btn-danger { background: var(--accent-pink); color: #fff; border: none; }
+.btn-danger:hover { background: #fb7185; }
+.btn-recording { animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity: .65; } }
+
+/* Kamera-Hinweis */
+#cam-overlay {
+    position: absolute; inset: 0; z-index: 15; display: none;
+    align-items: center; justify-content: center; padding: 24px; text-align: center;
+    background: rgba(11,15,25,.88);
+}
+#cam-overlay.show { display: flex; }
+#cam-box { max-width: 380px; display: flex; flex-direction: column; gap: 14px; align-items: center; }
+#cam-box h2 { font-size: 1.1rem; color: var(--accent-cyan); }
+#cam-msg { font-size: .9rem; color: var(--text-muted); line-height: 1.5; }
+#cam-retry-btn { padding: 12px 20px; font-size: .95rem; }
+
+#shortcuts-help {
+    position: absolute; bottom: calc(12px + var(--safe-b)); right: calc(12px + var(--safe-r));
+    background: var(--panel-bg); border: 1px solid var(--panel-border);
+    padding: 8px 12px; border-radius: 8px; font-size: .75rem; color: var(--text-muted);
+    pointer-events: none; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+kbd { background: rgba(255,255,255,.1); padding: 2px 4px; border-radius: 4px; color: var(--accent-cyan); font-family: monospace; }
+
+#toast {
+    position: absolute; top: calc(14px + var(--safe-t)); left: 50%; transform: translateX(-50%);
+    max-width: calc(100% - 140px); text-align: center;
+    background: rgba(15,23,42,.95); border: 1px solid var(--accent-cyan); color: var(--text-main);
+    padding: 9px 16px; border-radius: 8px; font-size: .85rem; z-index: 40;
+    opacity: 0; transition: opacity .3s ease; pointer-events: none; box-shadow: 0 4px 16px rgba(0,0,0,.5);
+}
+#toast.show { opacity: 1; }
+
+/* Smartphones / schmale Fenster: Panel als Bottom-Sheet, standardmässig zu */
+@media (max-width: 700px) {
+    #controls-panel {
+        top: auto; left: calc(8px + var(--safe-l)); right: calc(8px + var(--safe-r)); bottom: calc(8px + var(--safe-b));
+        width: auto; max-height: 58%;
+    }
+    #controls-panel.collapsed { transform: translateY(110%); }
+}
+@media (max-width: 700px), (hover: none) { #shortcuts-help { display: none; } }
+</style>
+</head>
+<body>
+<div id="app-container">
+    <video id="webcam" playsinline muted autoplay></video>
+    <canvas id="output-canvas"></canvas>
+
+    <div id="cam-overlay">
+        <div id="cam-box">
+            <h2>Kamera nicht verfügbar</h2>
+            <p id="cam-msg"></p>
+            <button id="cam-retry-btn" class="btn btn-active">📷 Kamera starten</button>
+        </div>
+    </div>
+
+    <button id="toggle-panel-btn" title="Einstellungen (H)" aria-label="Einstellungen umschalten">⚙️</button>
+    <div id="toast" role="status" aria-live="polite"></div>
+
+    <div id="controls-panel">
+        <div class="panel-header">
+            <div class="panel-title">
+                <img src="icon.svg" width="24" height="24" alt="" style="border-radius:6px">
+                Poi Mirror v1.1
+            </div>
+            <button id="close-panel-btn" class="btn" aria-label="Menü schliessen">✕</button>
+        </div>
+
+        <div class="panel-content">
+            <div class="control-section">
+                <div class="section-title">Kamera &amp; Video</div>
+                <div class="control-group">
+                    <div class="control-label">Kamera-Quelle</div>
+                    <select id="camera-select"><option value="">Kamera wird gesucht…</option></select>
+                </div>
+                <div class="control-group">
+                    <button id="switch-cam-btn" class="btn">🔄 Kamera wechseln (Front/Back)</button>
+                </div>
+                <div class="control-group">
+                    <div class="control-label"><span>Replay-Delay (Zeitversatz)</span><span id="delay-val">0.0s</span></div>
+                    <input type="range" id="delay-slider" min="0" max="5" step="0.5" value="0">
+                </div>
+                <div class="btn-grid">
+                    <button id="mirror-btn" class="btn btn-active">↔️ Spiegeln: An</button>
+                    <button id="record-btn" class="btn btn-danger">🔴 Aufnahme</button>
+                </div>
+            </div>
+
+            <div class="control-section">
+                <div class="section-title">LED-Tracking &amp; Trails</div>
+                <div class="control-group">
+                    <div class="control-label"><span>Trail-Länge</span><span id="trail-val">0.60</span></div>
+                    <input type="range" id="trail-slider" min="0" max="0.95" step="0.05" value="0.60">
+                </div>
+                <div class="control-group">
+                    <div class="control-label"><span>Licht-Schwellenwert (LED)</span><span id="thresh-val">90%</span></div>
+                    <input type="range" id="thresh-slider" min="50" max="99" step="1" value="90">
+                </div>
+            </div>
+
+            <div class="control-section">
+                <div class="section-title">Muster &amp; Raster</div>
+                <div class="control-group">
+                    <div class="control-label">Raster-Typ</div>
+                    <select id="grid-select">
+                        <option value="none">Keines</option>
+                        <option value="4way">4-Wege (Kardinallinien)</option>
+                        <option value="8way" selected>8-Wege (Kardinal + Diagonal)</option>
+                        <option value="triquetra">Triquetra / 3-Wege</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <div class="control-label">Blumen-Muster</div>
+                    <select id="flower-select">
+                        <option value="none" selected>Keines</option>
+                        <option value="anti4">4-Petal Antispin</option>
+                        <option value="anti3">3-Petal Antispin</option>
+                        <option value="in4">4-Petal Inspin</option>
+                        <option value="in3">3-Petal Inspin</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <div class="control-label"><span>Muster-Grösse</span><span id="size-val">40%</span></div>
+                    <input type="range" id="size-slider" min="10" max="80" step="5" value="40">
+                </div>
+            </div>
+
+            <div class="control-section">
+                <div class="section-title">Sound &amp; Metronom</div>
+                <div class="btn-grid" style="margin-bottom:10px;">
+                    <button id="metro-btn" class="btn">⏱️ Metronom: Aus</button>
+                    <button id="sound-btn" class="btn">🎵 Sektor-Sound: Aus</button>
+                </div>
+                <div class="control-group">
+                    <div class="control-label"><span>Tempo (BPM)</span><span id="bpm-val">90 BPM</span></div>
+                    <input type="range" id="bpm-slider" min="40" max="200" step="1" value="90">
+                </div>
+                <div class="control-group">
+                    <div class="control-label">Sound-Instrument</div>
+                    <select id="instrument-select">
+                        <option value="synth">Synth Bell</option>
+                        <option value="kalimba">Kalimba</option>
+                        <option value="marimba">Marimba</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="shortcuts-help">
+        <kbd>Leertaste</kbd> Metronom | <kbd>R</kbd> Aufnehmen | <kbd>M</kbd> Spiegeln | <kbd>C</kbd> Kamera | <kbd>H</kbd> Menü
+    </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* ---------- State ---------- */
+const state = {
+    mirror: true,
+    delaySecs: 0,
+    trail: 0.60,            // 0 = kein Trail, 0.95 = sehr lang
+    lightThreshold: 0.90,
+    grid: '8way',
+    flower: 'none',
+    flowerSize: 0.40,
+    centerPin: { x: 0.5, y: 0.5 },
+    metronome: false,
+    bpm: 90,
+    sectorSound: false,
+    instrument: 'synth',
+    isRecording: false,
+    videoDevices: [],
+    currentDeviceId: null,
+    facing: 'user'
+};
+
+const $ = id => document.getElementById(id);
+const video = $('webcam');
+const canvas = $('output-canvas');
+const ctx = canvas.getContext('2d');
+const trailCanvas = document.createElement('canvas');      // sammelt Video + Trails
+const tctx = trailCanvas.getContext('2d');
+const anaCanvas = document.createElement('canvas');        // kleine Analyse-Ebene für LED-Erkennung
+const actx = anaCanvas.getContext('2d', { willReadFrequently: true });
+const controlsPanel = $('controls-panel');
+const cameraSelect = $('camera-select');
+const toastEl = $('toast');
+const camOverlay = $('cam-overlay');
+
+let W = 0, H = 0, DPR = 1;
+let stream = null, cameraReady = false, camToken = 0;
+let frames = [], lastCap = 0;
+const CAP_FPS = 20, CAP_INTERVAL = 1000 / CAP_FPS, CAP_WIDTH = 480;
+let detected = null;             // geglättete LED-Position (CSS-Pixel)
+let lastSector = -1;
+let beatPulse = 0;
+
+/* ---------- Helfer ---------- */
+let toastTimer = null;
+function showToast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2500);
+}
+
+function resizeCanvas() {
+    DPR = Math.min(window.devicePixelRatio || 1, 1.5);
+    W = canvas.clientWidth || window.innerWidth;
+    H = canvas.clientHeight || window.innerHeight;
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    trailCanvas.width = canvas.width;
+    trailCanvas.height = canvas.height;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    tctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    tctx.fillStyle = '#000';
+    tctx.fillRect(0, 0, W, H);
+}
+window.addEventListener('resize', resizeCanvas);
+window.addEventListener('orientationchange', () => setTimeout(resizeCanvas, 200));
+resizeCanvas();
+
+function containRect(sw, sh) {
+    const s = Math.min(W / sw, H / sh);
+    const dw = sw * s, dh = sh * s;
+    return { dx: (W - dw) / 2, dy: (H - dh) / 2, dw, dh };
+}
+
+/* ---------- Audio ---------- */
+let audioCtx = null;
+function initAudio() {
+    if (!audioCtx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        audioCtx = new AC();
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function playNote(freq, type = 'sine', duration = 0.25, vol = 0.3) {
+    if (!audioCtx) return;
+    try {
+        const t = audioCtx.currentTime;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, t);
+        gain.gain.setValueAtTime(vol, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(t);
+        osc.stop(t + duration);
+    } catch (e) { console.error('Audio-Fehler', e); }
+}
+
+const SCALE = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25]; // C-Dur
+function playSectorSound(sector) {
+    const wave = { synth: 'sine', kalimba: 'triangle', marimba: 'square' }[state.instrument] || 'sine';
+    const dur = state.instrument === 'synth' ? 0.35 : 0.2;
+    playNote(SCALE[sector % SCALE.length], wave, dur, state.instrument === 'marimba' ? 0.15 : 0.3);
+}
+
+/* ---------- Kamera ---------- */
+function camErrorText(err) {
+    const p = location.protocol;
+    if (p === 'content:' || p === 'file:') {
+        return 'Die Datei wurde direkt vom Gerät geöffnet (' + p + '//). Dort blockiert der Browser die Kamera. Öffne Poi Mirror stattdessen über seine Webadresse (z. B. https://DEIN-NAME.github.io/poi-mirror/).';
+    }
+    if (!window.isSecureContext) {
+        return 'Kamerazugriff funktioniert nur über HTTPS oder localhost. Öffne die Seite über eine sichere Adresse (oder lokal als Datei/localhost).';
+    }
+    switch (err && err.name) {
+        case 'NotAllowedError':
+        case 'PermissionDeniedError':
+            return 'Der Zugriff wurde blockiert. Erlaube die Kamera in den Browser-/Seiteneinstellungen und tippe dann auf „Kamera starten“.';
+        case 'NotFoundError':
+        case 'DevicesNotFoundError':
+            return 'Es wurde keine Kamera gefunden. Schliesse eine Kamera an und versuche es erneut.';
+        case 'NotReadableError':
+        case 'TrackStartError':
+            return 'Die Kamera wird von einer anderen App oder einem anderen Tab verwendet. Schliesse diese und versuche es erneut.';
+        case 'OverconstrainedError':
+            return 'Die gewählte Kamera unterstützt die Einstellungen nicht. Wähle eine andere Kamera.';
+        case 'SecurityError':
+            return 'Der Browser verbietet den Kamerazugriff auf dieser Seite (Sicherheitsrichtlinie / eingebetteter Frame).';
+        default:
+            return 'Die Kamera konnte nicht gestartet werden' + (err && err.message ? ' (' + err.message + ')' : '') + '.';
+    }
+}
+
+function showCamError(err) {
+    cameraReady = false;
+    $('cam-msg').textContent = (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)
+        ? 'Dieser Browser bietet keinen Kamerazugriff. Verwende einen aktuellen Browser über HTTPS oder localhost.'
+        : camErrorText(err);
+    camOverlay.classList.add('show');
+}
+function hideCamError() { camOverlay.classList.remove('show'); }
+
+function stopCamera() {
+    cameraReady = false;
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = null;
+    video.srcObject = null;
+}
+
+async function getCameras() {
+    try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        state.videoDevices = devices.filter(d => d.kind === 'videoinput');
+        cameraSelect.innerHTML = '';
+        if (!state.videoDevices.length) {
+            cameraSelect.innerHTML = '<option value="">Keine Kamera gefunden</option>';
+            return;
+        }
+        state.videoDevices.forEach((d, i) => {
+            const o = document.createElement('option');
+            o.value = d.deviceId;
+            o.textContent = d.label || ('Kamera ' + (i + 1));
+            cameraSelect.appendChild(o);
+        });
+        if (state.currentDeviceId) cameraSelect.value = state.currentDeviceId;
+    } catch (e) { console.error('Kamera-Aufzählung fehlgeschlagen', e); }
+}
+
+async function startCamera(deviceId = null) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { showCamError(); return; }
+    const token = ++camToken;
+    stopCamera();
+    hideCamError();
+    frames = [];
+
+    const base = { width: { ideal: 1280 }, height: { ideal: 720 } };
+    const attempts = [];
+    if (deviceId) attempts.push({ video: { ...base, deviceId: { exact: deviceId } }, audio: false });
+    else attempts.push({ video: { ...base, facingMode: { ideal: state.facing } }, audio: false });
+    attempts.push({ video: true, audio: false });
+
+    let s = null, lastErr = null;
+    for (const c of attempts) {
+        try { s = await navigator.mediaDevices.getUserMedia(c); break; }
+        catch (e) {
+            lastErr = e;
+            if (e.name === 'NotAllowedError' || e.name === 'SecurityError' || e.name === 'NotFoundError') break;
+        }
+    }
+    if (token !== camToken) { if (s) s.getTracks().forEach(t => t.stop()); return; }  // veraltete Anfrage
+    if (!s) { showCamError(lastErr); return; }
+
+    stream = s;
+    video.srcObject = s;
+    const track = s.getVideoTracks()[0];
+    track.addEventListener('ended', () => { if (token === camToken) showCamError({ name: 'NotReadableError' }); });
+
+    try { await video.play(); }
+    catch (e) { console.warn('Autoplay blockiert', e); showCamError({ name: 'NotAllowedError' }); return; }
+
+    // warten, bis wirklich Bilddaten vorliegen
+    if (!video.videoWidth) {
+        await new Promise(res => {
+            const t = setTimeout(res, 3000);
+            video.addEventListener('loadeddata', () => { clearTimeout(t); res(); }, { once: true });
+        });
+    }
+    if (token !== camToken) return;
+
+    const st = track.getSettings ? track.getSettings() : {};
+    if (st.deviceId) state.currentDeviceId = st.deviceId;
+    if (st.facingMode) {
+        state.facing = st.facingMode === 'environment' ? 'environment' : 'user';
+        setMirror(st.facingMode !== 'environment', true);   // Rückkamera: nicht spiegeln
+    }
+    await getCameras();
+    cameraReady = true;
+}
+
+cameraSelect.addEventListener('change', e => { if (e.target.value) startCamera(e.target.value); });
+
+$('switch-cam-btn').addEventListener('click', () => {
+    const list = state.videoDevices;
+    if (list.length > 2 || (list.length === 2 && list[0].label && list[1].label)) {
+        const idx = Math.max(0, list.findIndex(d => d.deviceId === state.currentDeviceId));
+        const next = list[(idx + 1) % list.length];
+        showToast('Kamera: ' + (next.label || 'wechsel'));
+        startCamera(next.deviceId);
+    } else {
+        state.facing = state.facing === 'user' ? 'environment' : 'user';
+        state.currentDeviceId = null;
+        showToast(state.facing === 'user' ? 'Frontkamera' : 'Rückkamera');
+        startCamera();
+    }
+});
+
+$('cam-retry-btn').addEventListener('click', () => { initAudio(); startCamera(state.currentDeviceId); });
+
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && stream) {
+        const t = stream.getVideoTracks()[0];
+        if (!t || t.readyState === 'ended') startCamera(state.currentDeviceId);
+    }
+});
+
+/* ---------- Delay-Puffer ---------- */
+const ringTarget = () => Math.max(1, Math.round(state.delaySecs * CAP_FPS));
+
+function captureFrame(vw, vh) {
+    const target = ringTarget();
+    while (frames.length > target) frames.shift();
+    const cw = CAP_WIDTH, ch = Math.round(CAP_WIDTH * vh / vw);
+    const c = frames.length >= target ? frames.shift() : document.createElement('canvas');
+    if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; }
+    const x = c.getContext('2d');
+    x.save();
+    if (state.mirror) { x.translate(cw, 0); x.scale(-1, 1); }
+    x.drawImage(video, 0, 0, cw, ch);
+    x.restore();
+    frames.push(c);
+}
+
+function drawSource(c, src, sw, sh, mirrorLive) {
+    const r = containRect(sw, sh);
+    c.save();
+    if (mirrorLive) {
+        const mx = r.dx + r.dw / 2;
+        c.translate(mx, 0); c.scale(-1, 1); c.translate(-mx, 0);
+    }
+    c.drawImage(src, r.dx, r.dy, r.dw, r.dh);
+    c.restore();
+    return r;
+}
+
+/* ---------- LED-Erkennung ---------- */
+function detectLED(src, sw, sh, mirrorLive, rect) {
+    const aw = 160, ah = Math.max(1, Math.round(aw * sh / sw));
+    if (anaCanvas.width !== aw || anaCanvas.height !== ah) { anaCanvas.width = aw; anaCanvas.height = ah; }
+    actx.save();
+    if (mirrorLive) { actx.translate(aw, 0); actx.scale(-1, 1); }
+    actx.drawImage(src, 0, 0, aw, ah);
+    actx.restore();
+
+    let data;
+    try { data = actx.getImageData(0, 0, aw, ah).data; } catch (e) { return null; }
+
+    const thresh = state.lightThreshold * 255;
+    let sx = 0, sy = 0, n = 0;
+    for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+        const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        if (lum > thresh) { sx += p % aw; sy += (p / aw) | 0; n++; }
+    }
+    if (n < 2) return null;
+    return { x: rect.dx + (sx / n / aw) * rect.dw, y: rect.dy + (sy / n / ah) * rect.dh };
+}
+
+/* ---------- Render-Loop ---------- */
+function render(now) {
+    requestAnimationFrame(render);
+    if (!cameraReady || video.readyState < 2 || !video.videoWidth) return;
+
+    const vw = video.videoWidth, vh = video.videoHeight;
+    let src = video, sw = vw, sh = vh, mirrorLive = state.mirror, buffering = false;
+
+    if (state.delaySecs > 0) {
+        if (now - lastCap >= CAP_INTERVAL) { lastCap = now; captureFrame(vw, vh); }
+        if (frames.length < ringTarget()) buffering = true;
+        else { src = frames[0]; sw = src.width; sh = src.height; mirrorLive = false; }
+    }
+
+    // Trail: altes Bild abdunkeln, neues Bild mit "lighten" darüberlegen
+    tctx.globalCompositeOperation = 'source-over';
+    tctx.fillStyle = `rgba(0,0,0,${(1 - state.trail).toFixed(3)})`;
+    tctx.fillRect(0, 0, W, H);
+
+    detected = null;
+    if (!buffering) {
+        tctx.globalCompositeOperation = 'lighten';
+        const rect = drawSource(tctx, src, sw, sh, mirrorLive);
+        tctx.globalCompositeOperation = 'source-over';
+        detected = detectLED(src, sw, sh, mirrorLive, rect);
+    }
+
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(trailCanvas, 0, 0, W, H);
+
+    if (buffering) {
+        ctx.fillStyle = 'rgba(248,250,252,.8)';
+        ctx.font = '600 14px -apple-system, Segoe UI, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Delay-Puffer füllt sich …', W / 2, H / 2);
+    }
+
+    handleDetection();
+    drawOverlays();
+}
+
+function handleDetection() {
+    if (!detected) { lastSector = -1; return; }
+
+    ctx.beginPath();
+    ctx.arc(detected.x, detected.y, 14, 0, Math.PI * 2);
+    ctx.strokeStyle = '#f43f5e';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    if (state.sectorSound) {
+        const cx = W * state.centerPin.x, cy = H * state.centerPin.y;
+        let ang = Math.atan2(detected.y - cy, detected.x - cx) + Math.PI;   // 0 … 2π
+        const sector = Math.min(7, Math.floor(ang / (Math.PI * 2) * 8));
+        if (sector !== lastSector) { lastSector = sector; playSectorSound(sector); }
+    }
+}
+
+function drawOverlays() {
+    const cx = W * state.centerPin.x, cy = H * state.centerPin.y;
+    const R = Math.min(W, H) * state.flowerSize;
+    const L = Math.hypot(W, H);
+
+    ctx.save();
+    ctx.lineWidth = 2;
+
+    if (state.grid === '4way' || state.grid === '8way') {
+        ctx.strokeStyle = 'rgba(56,189,248,.45)';
+        ctx.beginPath();
+        ctx.moveTo(cx, 0); ctx.lineTo(cx, H);
+        ctx.moveTo(0, cy); ctx.lineTo(W, cy);
+        ctx.stroke();
+        if (state.grid === '8way') {
+            ctx.strokeStyle = 'rgba(56,189,248,.25)';
+            ctx.beginPath();
+            ctx.moveTo(cx - L, cy - L); ctx.lineTo(cx + L, cy + L);
+            ctx.moveTo(cx + L, cy - L); ctx.lineTo(cx - L, cy + L);
+            ctx.stroke();
+        }
+    } else if (state.grid === 'triquetra') {
+        ctx.strokeStyle = 'rgba(168,85,247,.5)';
+        for (let i = 0; i < 3; i++) {
+            const a = (i * 120 - 90) * Math.PI / 180;
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx + Math.cos(a) * L, cy + Math.sin(a) * L);
+            ctx.stroke();
+        }
+    }
+
+    // Blumen: Kopf = Hand-Kreis (Tempo 1) + Poi-Kreis (Tempo m); Blütenblätter = |m − 1|
+    if (state.flower !== 'none') {
+        const n = state.flower.endsWith('3') ? 3 : 4;
+        const m = state.flower.startsWith('anti') ? 1 - n : 1 + n;
+        const a = R * 0.5, l = R * 0.5;
+        ctx.strokeStyle = '#f43f5e';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        const steps = 360;
+        for (let i = 0; i <= steps; i++) {
+            const t = (i / steps) * Math.PI * 2;
+            const x = cx + a * Math.cos(t) + l * Math.cos(m * t);
+            const y = cy + a * Math.sin(t) + l * Math.sin(m * t);
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+    }
+
+    // Mittelpunkt (zieh-/tippbar) mit Metronom-Puls
+    beatPulse *= 0.9;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 7 + beatPulse * 9, 0, Math.PI * 2);
+    ctx.fillStyle = beatPulse > 0.2 ? '#f8fafc' : '#38bdf8';
+    ctx.fill();
+    ctx.restore();
+}
+
+/* ---------- UI ---------- */
+function setMirror(on, silent) {
+    state.mirror = on;
+    frames = [];
+    const b = $('mirror-btn');
+    b.textContent = '↔️ Spiegeln: ' + (on ? 'An' : 'Aus');
+    b.classList.toggle('btn-active', on);
+    if (!silent) showToast('Spiegelung ' + (on ? 'aktiviert' : 'deaktiviert'));
+}
+$('mirror-btn').addEventListener('click', () => setMirror(!state.mirror));
+
+$('delay-slider').addEventListener('input', e => {
+    state.delaySecs = parseFloat(e.target.value);
+    frames = [];
+    $('delay-val').textContent = state.delaySecs.toFixed(1) + 's';
+});
+$('trail-slider').addEventListener('input', e => {
+    state.trail = parseFloat(e.target.value);
+    $('trail-val').textContent = state.trail.toFixed(2);
+});
+$('thresh-slider').addEventListener('input', e => {
+    state.lightThreshold = parseInt(e.target.value, 10) / 100;
+    $('thresh-val').textContent = e.target.value + '%';
+});
+$('grid-select').addEventListener('change', e => { state.grid = e.target.value; });
+$('flower-select').addEventListener('change', e => { state.flower = e.target.value; });
+$('size-slider').addEventListener('input', e => {
+    state.flowerSize = parseInt(e.target.value, 10) / 100;
+    $('size-val').textContent = e.target.value + '%';
+});
+$('instrument-select').addEventListener('change', e => { state.instrument = e.target.value; });
+
+/* Metronom */
+let metroInterval = null;
+function tick() { playNote(880, 'sine', 0.05); beatPulse = 1; }
+function startMetro() { clearInterval(metroInterval); metroInterval = setInterval(tick, 60000 / state.bpm); }
+$('metro-btn').addEventListener('click', () => {
+    initAudio();
+    state.metronome = !state.metronome;
+    const b = $('metro-btn');
+    b.textContent = '⏱️ Metronom: ' + (state.metronome ? 'An' : 'Aus');
+    b.classList.toggle('btn-active', state.metronome);
+    if (state.metronome) { tick(); startMetro(); showToast('Metronom gestartet'); }
+    else { clearInterval(metroInterval); showToast('Metronom gestoppt'); }
+});
+$('bpm-slider').addEventListener('input', e => {
+    state.bpm = parseInt(e.target.value, 10);
+    $('bpm-val').textContent = state.bpm + ' BPM';
+    if (state.metronome) startMetro();
+});
+$('sound-btn').addEventListener('click', () => {
+    initAudio();
+    state.sectorSound = !state.sectorSound;
+    const b = $('sound-btn');
+    b.textContent = '🎵 Sektor-Sound: ' + (state.sectorSound ? 'An' : 'Aus');
+    b.classList.toggle('btn-active', state.sectorSound);
+    showToast('Sektor-Sound ' + (state.sectorSound ? 'aktiviert' : 'deaktiviert'));
+});
+
+/* Panel ein-/ausblenden (auf Smartphones startet es geschlossen, damit nichts den Spiegel verdeckt) */
+function setPanel(open) {
+    controlsPanel.classList.toggle('collapsed', !open);
+    $('toggle-panel-btn').textContent = open ? '✕' : '⚙️';
+}
+$('toggle-panel-btn').addEventListener('click', () => setPanel(controlsPanel.classList.contains('collapsed')));
+$('close-panel-btn').addEventListener('click', () => setPanel(false));
+setPanel(window.innerWidth > 700);
+
+/* Mittelpunkt ziehen (Maus & Touch) */
+let dragging = false;
+canvas.addEventListener('pointerdown', e => {
+    const r = canvas.getBoundingClientRect();
+    const cx = r.left + W * state.centerPin.x, cy = r.top + H * state.centerPin.y;
+    if (Math.hypot(e.clientX - cx, e.clientY - cy) < 40) {
+        dragging = true;
+        canvas.setPointerCapture(e.pointerId);
+    } else if (window.innerWidth <= 700 && !controlsPanel.classList.contains('collapsed')) {
+        setPanel(false);
+    }
+});
+canvas.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    const r = canvas.getBoundingClientRect();
+    state.centerPin.x = Math.min(1, Math.max(0, (e.clientX - r.left) / W));
+    state.centerPin.y = Math.min(1, Math.max(0, (e.clientY - r.top) / H));
+});
+const endDrag = () => { dragging = false; };
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+
+/* Aufnahme */
+const recordBtn = $('record-btn');
+let mediaRecorder = null, recordedChunks = [];
+function pickMime() {
+    if (!window.MediaRecorder) return null;
+    const list = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+    return list.find(t => MediaRecorder.isTypeSupported(t)) || '';
+}
+recordBtn.addEventListener('click', () => {
+    if (!state.isRecording) {
+        const mime = pickMime();
+        if (mime === null || !canvas.captureStream) { showToast('Aufnahme in diesem Browser nicht unterstützt'); return; }
+        try {
+            const s = canvas.captureStream(30);
+            mediaRecorder = new MediaRecorder(s, mime ? { mimeType: mime } : undefined);
+            recordedChunks = [];
+            mediaRecorder.ondataavailable = e => { if (e.data && e.data.size) recordedChunks.push(e.data); };
+            mediaRecorder.onstop = () => {
+                const type = mediaRecorder.mimeType || mime || 'video/webm';
+                const blob = new Blob(recordedChunks, { type });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'poi-practice-' + new Date().toISOString().slice(0, 19).replace(/:/g, '-') + (type.includes('mp4') ? '.mp4' : '.webm');
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 10000);
+                showToast('Aufnahme heruntergeladen');
+            };
+            mediaRecorder.start(1000);
+            state.isRecording = true;
+            recordBtn.textContent = '⏹️ Stoppen';
+            recordBtn.classList.add('btn-recording');
+            showToast('🔴 Aufnahme gestartet …');
+        } catch (err) {
+            console.error('Aufnahmefehler', err);
+            showToast('Aufnahme konnte nicht gestartet werden');
+        }
+    } else {
+        try { mediaRecorder.stop(); } catch (e) {}
+        state.isRecording = false;
+        recordBtn.textContent = '🔴 Aufnahme';
+        recordBtn.classList.remove('btn-recording');
+    }
+});
+
+/* Tastaturkürzel */
+window.addEventListener('keydown', e => {
+    const tag = e.target.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (e.code === 'Space') { e.preventDefault(); $('metro-btn').click(); }
+    else if (e.code === 'KeyR') recordBtn.click();
+    else if (e.code === 'KeyM') $('mirror-btn').click();
+    else if (e.code === 'KeyH') $('toggle-panel-btn').click();
+    else if (e.code === 'KeyC') $('switch-cam-btn').click();
+});
+
+/* Offline-Fähigkeit / Installation als App */
+if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+/* Start */
+startCamera();
+requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>
